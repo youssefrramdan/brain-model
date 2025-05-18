@@ -99,16 +99,9 @@ async def predict(file: UploadFile = File(...)):
         predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
         confidence = float(np.max(predictions[0]))
 
-        # إعداد النتائج التفصيلية
-        class_probabilities = {
-            class_name: float(prob)
-            for class_name, prob in zip(CLASS_NAMES, predictions[0])
-        }
-
         return JSONResponse(content={
             "prediction": predicted_class,
-            "confidence": confidence,
-            "probabilities": class_probabilities
+            "confidence": confidence
         })
 
     except Exception as e:
