@@ -75,11 +75,6 @@ async def predict(request: ImageRequest):
         return JSONResponse({
             "prediction": predicted_class,
             "confidence": round(confidence, 2),
-            "timing": {
-                "download": round(download_end - download_start, 3),
-                "prediction": round(pred_end - pred_start, 3),
-                "total": round(total_end - total_start, 3)
-            }
         })
 
     except Exception as e:
