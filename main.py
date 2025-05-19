@@ -1,16 +1,13 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, Query, Body
 from fastapi.responses import JSONResponse
-import tensorflow as tf
-import numpy as np
 from PIL import Image
-import io
+import numpy as np
+import tensorflow as tf
+import requests
+from io import BytesIO
+import time
 import os
-import logging
-from pathlib import Path
-
-# إعداد التسجيل
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from pydantic import BaseModel
 
 app = FastAPI(
     title="Brain Tumor Classification API",
@@ -18,96 +15,93 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# التأكد من وجود النموذج
+# Load TFLite model
 MODEL_PATH = "Brain_model.tflite"
 if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"Model file {MODEL_PATH} not found. Please ensure the model file is in the correct location.")
+    raise FileNotFoundError(f"Model file {MODEL_PATH} not found")
 
-try:
-    # تحميل نموذج TFLite
-    interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
-    interpreter.allocate_tensors()
+interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+interpreter.allocate_tensors()
 
-    # الحصول على معلومات المدخلات والمخرجات
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    logger.info("TFLite model loaded successfully")
-except Exception as e:
-    logger.error(f"Error loading model: {str(e)}")
-    raise
+# Get input and output tensors
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
-# أسماء الفئات
 CLASS_NAMES = ["glioma", "meningioma", "no_tumor", "pituitary"]
 
-def preprocess_image(img: Image.Image) -> np.ndarray:
-    """
-    تجهيز الصورة للتصنيف
-    """
-    try:
-        img = img.resize((224, 224))  # VGG16 input size
-        img_array = np.array(img, dtype=np.float32)
-        img_array = np.expand_dims(img_array, axis=0)
-        img_array = img_array / 255.0
-        return img_array
-    except Exception as e:
-        logger.error(f"Error preprocessing image: {str(e)}")
-        raise
+class ImageRequest(BaseModel):
+    image_url: str
 
-def get_prediction(image_array: np.ndarray) -> np.ndarray:
-    """
-    الحصول على التنبؤات باستخدام نموذج TFLite
-    """
-    try:
-        interpreter.set_tensor(input_details[0]['index'], image_array)
-        interpreter.invoke()
-        predictions = interpreter.get_tensor(output_details[0]['index'])
-        return predictions
-    except Exception as e:
-        logger.error(f"Error during prediction: {str(e)}")
-        raise
-
-@app.get("/")
-async def root():
-    """
-    نقطة النهاية الرئيسية للتحقق من حالة API
-    """
-    return {
-        "status": "active",
-        "model": "Brain Tumor Classification (TFLite)",
-        "supported_classes": CLASS_NAMES,
-        "input_shape": input_details[0]['shape'].tolist()
-    }
+def preprocess_image(image: Image.Image):
+    img = image.convert("RGB").resize((224, 224))
+    arr = np.array(img, dtype=np.float32)
+    arr = np.expand_dims(arr, axis=0)
+    arr = arr / 255.0
+    return arr
 
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    """
-    تصنيف صورة الرنين المغناطيسي للدماغ
-    """
-    # التحقق من نوع الملف
-    if not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
+async def predict(request: ImageRequest):
+    total_start = time.time()
 
     try:
-        contents = await file.read()
-        img = Image.open(io.BytesIO(contents)).convert("RGB")
+        # Step 1: Download image
+        download_start = time.time()
+        response = requests.get(request.image_url, timeout=10)
+        content_type = response.headers.get("Content-Type", "")
+        if not content_type.startswith("image/"):
+            return JSONResponse(status_code=400, content={"error": f"Invalid content type: {content_type}"})
+        img = Image.open(BytesIO(response.content))
+        download_end = time.time()
 
-        # تجهيز الصورة
+        # Step 2: Predict
+        pred_start = time.time()
         img_array = preprocess_image(img)
 
-        # التنبؤ
-        predictions = get_prediction(img_array)
+        # Set input tensor
+        interpreter.set_tensor(input_details[0]['index'], img_array)
+
+        # Run inference
+        interpreter.invoke()
+
+        # Get prediction
+        predictions = interpreter.get_tensor(output_details[0]['index'])
         predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
         confidence = float(np.max(predictions[0]))
+        pred_end = time.time()
 
-        return JSONResponse(content={
+        # Step 3: Return result
+        total_end = time.time()
+
+        return JSONResponse({
             "prediction": predicted_class,
-            "confidence": confidence
+            "confidence": round(confidence, 2),
+            "timing": {
+                "download": round(download_end - download_start, 3),
+                "prediction": round(pred_end - pred_start, 3),
+                "total": round(total_end - total_start, 3)
+            }
         })
 
     except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
+@app.get("/info")
+async def info():
+    return {
+        "app_name": "Brain Tumor Classification API",
+        "model": "Brain Tumor Classification using TensorFlow Lite",
+        "classes": CLASS_NAMES,
+        "endpoints": {
+            "/predict": "POST - Provide image URL to classify",
+            "/info": "GET - Get information about this API"
+        }
+    }
+
+# For running locally or on Heroku
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
