@@ -1,6 +1,6 @@
-tensorflow-cpu==2.15.0
-fastapi
-uvicorn
-pillow
-requests
-pydantic
+tflite-runtime==2.15.0
+fastapi==0.115.12
+uvicorn==0.34.2
+pillow==11.2.1
+requests==2.32.3
+pydantic==2.11.4

@@ -2,7 +2,7 @@ from fastapi import FastAPI, Query, Body
 from fastapi.responses import JSONResponse
 from PIL import Image
 import numpy as np
-import tensorflow as tf
+import tflite_runtime.interpreter as tflite
 import requests
 from io import BytesIO
 import time
@@ -21,7 +21,7 @@ if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"Model file {MODEL_PATH} not found")
 
 # Initialize TFLite interpreter
-interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+interpreter = tflite.Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
 
 # Get input and output tensors
