@@ -1,21 +1,40 @@
 import tensorflow as tf
+import numpy as np
+from tensorflow.keras.models import load_model
 
-# 1. تحميل النموذج الأصلي
-model = tf.keras.models.load_model("Brain_model.keras")
+# Load the original model
+model = load_model('Brain_model.keras')
 
-# 2. التحويل إلى TFLite (بدون ضغط)
+# Define the optimization parameters
 converter = tf.lite.TFLiteConverter.from_keras_model(model)
+
+# Enable quantization
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+converter.target_spec.supported_types = [tf.int8]
+
+# Enable experimental features for further size reduction
+converter.experimental_new_converter = True
+converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+
+# Representative dataset generator
+def representative_dataset():
+    for _ in range(100):
+        data = np.random.rand(1, 224, 224, 3) * 255
+        yield [data.astype(np.float32)]
+
+converter.representative_dataset = representative_dataset
+
+# Convert the model
 tflite_model = converter.convert()
 
-# 3. حفظ النموذج الجديد
-with open("Brain_model.tflite", "wb") as f:
+# Save the quantized model
+with open('Brain_model_optimized.tflite', 'wb') as f:
     f.write(tflite_model)
 
-# 4. طباعة فرق الحجم
+# Print size comparison
 import os
-
-original_size = os.path.getsize("Brain_model.keras") / 1024 / 1024
-tflite_size = os.path.getsize("Brain_model.tflite") / 1024 / 1024
-
-print(f"الحجم الأصلي: {original_size:.2f} MB")
-print(f"حجم TFLite: {tflite_size:.2f} MB")
+original_size = os.path.getsize('Brain_model.keras') / (1024 * 1024)
+new_size = os.path.getsize('Brain_model_optimized.tflite') / (1024 * 1024)
+print(f"Original model size: {original_size:.2f} MB")
+print(f"Optimized model size: {new_size:.2f} MB")
+print(f"Size reduction: {((original_size - new_size) / original_size * 100):.2f}%")

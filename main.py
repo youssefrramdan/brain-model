@@ -15,11 +15,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Load TFLite model
-MODEL_PATH = "Brain_model.tflite"
+# Load optimized TFLite model (quantized for better performance and smaller size)
+MODEL_PATH = "Brain_model_optimized.tflite"
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"Model file {MODEL_PATH} not found")
 
+# Initialize TFLite interpreter
 interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
 
