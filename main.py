@@ -1,69 +1,98 @@
+import numpy as np
+import tensorflow as tf
 from flask import Flask, request, jsonify
 from PIL import Image
-import numpy as np
-import tflite_runtime.interpreter as tflite
-import requests
-from io import BytesIO
+import io
 import time
+import logging
 import os
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Load optimized TFLite model (quantized for better performance and smaller size)
-MODEL_PATH = "Brain_model_optimized.tflite"
-if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"Model file {MODEL_PATH} not found")
-
-# Initialize TFLite interpreter
-interpreter = tflite.Interpreter(model_path=MODEL_PATH)
-interpreter.allocate_tensors()
-
-# Get input and output tensors
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-
-# Print input details for debugging
-print("Input tensor details:")
-print(f"Shape: {input_details[0]['shape']}")
-print(f"Type: {input_details[0]['dtype']}")
-print(f"Quantization: {input_details[0].get('quantization', 'None')}")
-
+# Global variables
+MODEL_PATH = 'Brain_model_optimized.tflite'
 CLASS_NAMES = ["glioma", "meningioma", "no_tumor", "pituitary"]
+INPUT_SIZE = 224
 
-def preprocess_image(image: Image.Image):
-    img = image.convert("RGB").resize((224, 224))
-    arr = np.array(img, dtype=np.float32)
-    arr = np.expand_dims(arr, axis=0)
-    arr = arr / 255.0
-    return arr
+# Load TFLite model
+try:
+    interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    logger.info("Model loaded successfully")
+
+    # Get input quantization parameters if model is quantized
+    input_scale = input_details[0]['quantization_parameters']['scale'] if input_details[0]['dtype'] == np.uint8 else None
+    input_zero_point = input_details[0]['quantization_parameters']['zero_point'] if input_details[0]['dtype'] == np.uint8 else None
+    is_quantized = input_details[0]['dtype'] == np.uint8
+
+except Exception as e:
+    logger.error(f"Failed to load model: {str(e)}")
+    raise
+
+def preprocess_image(image: Image.Image) -> np.ndarray:
+    """Preprocess image for model input"""
+    # Resize image
+    image = image.resize((INPUT_SIZE, INPUT_SIZE))
+
+    # Convert to RGB if needed
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    # Convert to numpy array and normalize
+    img_array = np.array(image, dtype=np.float32)
+    img_array = img_array / 255.0
+
+    # Add batch dimension
+    img_array = np.expand_dims(img_array, axis=0)
+
+    # Quantize if model is quantized
+    if is_quantized:
+        img_array = img_array / input_scale + input_zero_point
+        img_array = img_array.astype(np.uint8)
+
+    return img_array
+
+@app.route('/')
+def home():
+    """Root endpoint"""
+    return jsonify({
+        "message": "Brain Tumor Classification API",
+        "status": "active",
+        "supported_classes": CLASS_NAMES
+    })
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    total_start = time.time()
-
+    """
+    Predict tumor class from MRI image
+    """
     try:
-        # Get image URL from request
-        request_data = request.get_json()
-        if not request_data or 'image_url' not in request_data:
-            return jsonify({"error": "No image URL provided"}), 400
+        # Check if file is present in request
+        if 'file' not in request.files:
+            return jsonify({"error": "No file provided"}), 400
 
-        image_url = request_data['image_url']
+        file = request.files['file']
 
-        # Step 1: Download image
-        download_start = time.time()
-        response = requests.get(image_url, timeout=10)
-        content_type = response.headers.get("Content-Type", "")
-        if not content_type.startswith("image/"):
-            return jsonify({"error": f"Invalid content type: {content_type}"}), 400
-        img = Image.open(BytesIO(response.content))
-        download_end = time.time()
+        # Validate file type
+        if not file.content_type.startswith('image/'):
+            return jsonify({"error": "File must be an image"}), 400
 
-        # Step 2: Predict
+        # Read and preprocess image
+        image_data = file.read()
+        image = Image.open(io.BytesIO(image_data))
+        processed_image = preprocess_image(image)
+
+        # Make prediction
         pred_start = time.time()
-        img_array = preprocess_image(img)
 
         # Set input tensor
-        interpreter.set_tensor(input_details[0]['index'], img_array)
+        interpreter.set_tensor(input_details[0]['index'], processed_image)
 
         # Run inference
         interpreter.invoke()
@@ -71,43 +100,40 @@ def predict():
         # Get prediction
         predictions = interpreter.get_tensor(output_details[0]['index'])
 
-        # Add detailed debugging
-        print("Raw predictions:", predictions[0])
-        for idx, (class_name, pred_value) in enumerate(zip(CLASS_NAMES, predictions[0])):
-            print(f"{class_name}: {pred_value:.4f}")
+        # If quantized, dequantize outputs
+        if is_quantized:
+            scale, zero_point = output_details[0]['quantization_parameters']['scale'], output_details[0]['quantization_parameters']['zero_point']
+            predictions = (predictions.astype(np.float32) - zero_point) * scale
 
+        # Get predicted class and confidence
         predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
         confidence = float(np.max(predictions[0]))
-        pred_end = time.time()
 
-        # Step 3: Return result
-        total_end = time.time()
+        # Calculate prediction time
+        pred_time = time.time() - pred_start
+
+        # Log prediction details
+        logger.info(f"Prediction: {predicted_class}, Confidence: {confidence:.4f}, Time: {pred_time:.4f}s")
 
         return jsonify({
-            "prediction": predicted_class,
-            "confidence": round(confidence, 2),
+            "class": predicted_class,
+            "confidence": confidence,
+            "predictions": {class_name: float(pred) for class_name, pred in zip(CLASS_NAMES, predictions[0])},
+            "processing_time": pred_time
         })
 
     except Exception as e:
+        logger.error(f"Prediction error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/info', methods=['GET'])
-def info():
+@app.route('/health')
+def health():
+    """Health check endpoint"""
     return jsonify({
-        "app_name": "Brain Tumor Classification API",
-        "model": "Brain Tumor Classification using TensorFlow Lite",
-        "classes": CLASS_NAMES,
-        "endpoints": {
-            "/predict": "POST - Provide image URL to classify",
-            "/info": "GET - Get information about this API",
-            "/ping": "GET - Health check endpoint"
-        }
+        "status": "healthy",
+        "model": "brain_tumor_classifier"
     })
-
-@app.route('/ping', methods=['GET'])
-def ping():
-    return jsonify({"status": "ok", "model": "brain"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False)

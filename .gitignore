@@ -22,3 +22,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+Brain Code.ipynb
+Brain_model.keras
+Brain_model_optimized.tflite
