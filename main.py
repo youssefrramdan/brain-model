@@ -6,6 +6,7 @@ import io
 import time
 import logging
 import os
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -70,22 +71,25 @@ def home():
 @app.route('/predict', methods=['POST'])
 def predict():
     """
-    Predict tumor class from MRI image
+    Predict tumor class from MRI image URL
     """
     try:
-        # Check if file is present in request
-        if 'file' not in request.files:
-            return jsonify({"error": "No file provided"}), 400
+        # Get image URL from request
+        data = request.get_json()
+        if not data or 'image_url' not in data:
+            return jsonify({"error": "No image URL provided"}), 400
 
-        file = request.files['file']
+        image_url = data['image_url']
 
-        # Validate file type
-        if not file.content_type.startswith('image/'):
-            return jsonify({"error": "File must be an image"}), 400
+        # Download image from URL
+        try:
+            response = requests.get(image_url)
+            response.raise_for_status()
+            image = Image.open(io.BytesIO(response.content))
+        except Exception as e:
+            return jsonify({"error": f"Failed to download image from URL: {str(e)}"}), 400
 
-        # Read and preprocess image
-        image_data = file.read()
-        image = Image.open(io.BytesIO(image_data))
+        # Preprocess image
         processed_image = preprocess_image(image)
 
         # Make prediction
