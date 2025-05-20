@@ -22,6 +22,12 @@ interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
+# Print input details for debugging
+print("Input tensor details:")
+print(f"Shape: {input_details[0]['shape']}")
+print(f"Type: {input_details[0]['dtype']}")
+print(f"Quantization: {input_details[0].get('quantization', 'None')}")
+
 CLASS_NAMES = ["glioma", "meningioma", "no_tumor", "pituitary"]
 
 def preprocess_image(image: Image.Image):
@@ -64,6 +70,12 @@ def predict():
 
         # Get prediction
         predictions = interpreter.get_tensor(output_details[0]['index'])
+
+        # Add detailed debugging
+        print("Raw predictions:", predictions[0])
+        for idx, (class_name, pred_value) in enumerate(zip(CLASS_NAMES, predictions[0])):
+            print(f"{class_name}: {pred_value:.4f}")
+
         predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
         confidence = float(np.max(predictions[0]))
         pred_end = time.time()
