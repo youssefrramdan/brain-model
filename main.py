@@ -1,5 +1,5 @@
 import numpy as np
-import tensorflow as tf
+import tflite_runtime.interpreter as tflite
 from flask import Flask, request, jsonify
 from PIL import Image
 import io
@@ -20,7 +20,7 @@ INPUT_SIZE = 224
 
 # Load TFLite model
 try:
-    interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+    interpreter = tflite.Interpreter(model_path=MODEL_PATH)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
