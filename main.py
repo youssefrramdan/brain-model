@@ -1,6 +1,4 @@
-from fastapi import FastAPI, Query, Body
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from flask import Flask, request, jsonify
 from PIL import Image
 import numpy as np
 import tflite_runtime.interpreter as tflite
@@ -8,21 +6,8 @@ import requests
 from io import BytesIO
 import time
 import os
-from pydantic import BaseModel
 
-app = FastAPI(
-    title="Brain Tumor Classification API",
-    description="API for classifying brain tumors using MRI images",
-    version="1.0.0"
-)
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
+app = Flask(__name__)
 
 # Load optimized TFLite model (quantized for better performance and smaller size)
 MODEL_PATH = "Brain_model_optimized.tflite"
@@ -39,9 +24,6 @@ output_details = interpreter.get_output_details()
 
 CLASS_NAMES = ["glioma", "meningioma", "no_tumor", "pituitary"]
 
-class ImageRequest(BaseModel):
-    image_url: str
-
 def preprocess_image(image: Image.Image):
     img = image.convert("RGB").resize((224, 224))
     arr = np.array(img, dtype=np.float32)
@@ -49,17 +31,24 @@ def preprocess_image(image: Image.Image):
     arr = arr / 255.0
     return arr
 
-@app.post("/predict")
-async def predict(request: ImageRequest):
+@app.route('/predict', methods=['POST'])
+def predict():
     total_start = time.time()
 
     try:
+        # Get image URL from request
+        request_data = request.get_json()
+        if not request_data or 'image_url' not in request_data:
+            return jsonify({"error": "No image URL provided"}), 400
+
+        image_url = request_data['image_url']
+
         # Step 1: Download image
         download_start = time.time()
-        response = requests.get(request.image_url, timeout=10)
+        response = requests.get(image_url, timeout=10)
         content_type = response.headers.get("Content-Type", "")
         if not content_type.startswith("image/"):
-            return JSONResponse(status_code=400, content={"error": f"Invalid content type: {content_type}"})
+            return jsonify({"error": f"Invalid content type: {content_type}"}), 400
         img = Image.open(BytesIO(response.content))
         download_end = time.time()
 
@@ -82,20 +71,17 @@ async def predict(request: ImageRequest):
         # Step 3: Return result
         total_end = time.time()
 
-        return JSONResponse({
+        return jsonify({
             "prediction": predicted_class,
             "confidence": round(confidence, 2),
         })
 
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+        return jsonify({"error": str(e)}), 500
 
-@app.get("/info")
-async def info():
-    return {
+@app.route('/info', methods=['GET'])
+def info():
+    return jsonify({
         "app_name": "Brain Tumor Classification API",
         "model": "Brain Tumor Classification using TensorFlow Lite",
         "classes": CLASS_NAMES,
@@ -104,14 +90,12 @@ async def info():
             "/info": "GET - Get information about this API",
             "/ping": "GET - Health check endpoint"
         }
-    }
+    })
 
-@app.get("/ping")
-async def ping():
-    return {"status": "ok", "model": "brain"}
+@app.route('/ping', methods=['GET'])
+def ping():
+    return jsonify({"status": "ok", "model": "brain"})
 
-# For running locally or on Heroku
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port)
